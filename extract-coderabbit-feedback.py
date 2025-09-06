@@ -430,28 +430,31 @@ def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: Li
                 title = f"🤖 {title}"
                 
             output.append(f"### {i}. Lines {comment['lines']}: {title}")
-            output.append(f"**Source:** {comment['source']}")
-            if comment.get('comment_type'):
-                output.append(f"**Type:** {comment['comment_type']}")
             output.append("")
             
-            # Description
-            if comment['description']:
-                output.append("**Issue:**")
-                output.append(comment['description'])
-                output.append("")
+            # Description (only if substantial)
+            if comment['description'] and len(comment['description']) > 10:
+                # Clean up redundant prefixes and formatting noise
+                desc = comment['description']
+                desc = re.sub(r'^_.*?_\s*', '', desc)  # Remove _⚠️ Potential issue_ etc
+                desc = re.sub(r'\*\*.*?\*\*\s*', '', desc, count=1)  # Remove first **title** if duplicated
+                desc = re.sub(r'Apply this diff:\s*', '', desc)
+                desc = desc.strip()
+                
+                if desc and desc != title:
+                    output.append(desc)
+                    output.append("")
             
             # Code diff
             if comment['code_diff']:
-                output.append("**Suggested change:**")
                 output.append("```diff")
                 output.append(comment['code_diff'])
                 output.append("```")
                 output.append("")
             
-            # AI implementation instructions
+            # AI implementation prompt (reframed as suggestion, not instruction)
             if comment.get('ai_prompt'):
-                output.append("**🤖 AI Implementation Instructions:**")
+                output.append("**Proposed prompt:**")
                 output.append("```")
                 output.append(comment['ai_prompt'])
                 output.append("```")
