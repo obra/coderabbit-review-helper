@@ -121,6 +121,21 @@ def clean_html_artifacts(text: str) -> str:
     return text.strip()
 
 
+def clean_diff_artifacts(diff: str) -> str:
+    """Clean up diff artifacts and markers."""
+    if not diff:
+        return diff
+        
+    # Remove @@ hunk markers - handle both @@ ... @@ and lone @@ lines
+    diff = re.sub(r'^@@.*?@@.*?\n', '', diff, flags=re.MULTILINE)  # Full hunk headers
+    diff = re.sub(r'^\s*@@\s*\n', '', diff, flags=re.MULTILINE)    # Lone @@ lines
+    
+    # Remove empty lines at start/end
+    diff = diff.strip()
+    
+    return diff
+
+
 def extract_prompt_for_ai_agents(body: str) -> List[str]:
     """Extract 'Prompt for AI Agents' sections from review body."""
     prompts = []
@@ -262,6 +277,7 @@ def parse_file_level_comments(content: str) -> List[Dict[str, Any]]:
                         # HTML decode only entities, don't let BeautifulSoup interpret as HTML
                         code_diff = html.unescape(code_diff)
                         code_diff = clean_html_artifacts(code_diff)  # Remove any HTML comments in diffs
+                        code_diff = clean_diff_artifacts(code_diff)  # Clean up @@ markers and artifacts
                 
                 # Clean up description
                 description = clean_html_artifacts(description)  # Remove HTML comments first
@@ -400,6 +416,10 @@ def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: Li
             # Clean up markdown formatting and HTML artifacts for LLM consumption
             main_content = main_content.replace('_🛠️ Refactor suggestion_', '').strip()
             main_content = clean_html_artifacts(main_content)  # Remove HTML comments
+            
+            # Clean up any diffs in the main content
+            main_content = re.sub(r'```diff\n(.*?)\n```', lambda m: f'```diff\n{clean_diff_artifacts(m.group(1))}\n```', main_content, flags=re.DOTALL)
+            
             main_content = re.sub(r'\n\n+', '\n\n', main_content)  # Normalize line breaks
             
             output.append("**Suggestion:**")
