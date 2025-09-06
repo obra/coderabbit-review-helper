@@ -146,7 +146,8 @@ def parse_review_sections(body: str) -> Dict[str, Any]:
     if actionable_match:
         sections['actionable_count'] = int(actionable_match.group(1))
     
-    # Parse HTML structure
+    # Parse HTML structure - but be careful not to mangle code content
+    # Only use BeautifulSoup for extracting the <details> sections, then work with raw content
     soup = BeautifulSoup(body, 'html.parser')
     
     # Find sections by looking for <details> elements with specific summary text
@@ -176,10 +177,24 @@ def parse_review_sections(body: str) -> Dict[str, Any]:
             count_match = re.search(r'\((\d+)\)', summary_text)
             if count_match:
                 count = int(count_match.group(1))
-                blockquote = details.find('blockquote')
-                if blockquote:
-                    content = str(blockquote)
-                    sections['nitpick_comments'] = {'count': count, 'content': content}
+                # Instead of using BeautifulSoup's blockquote content (which mangles code),
+                # extract the raw content from the original body text
+                
+                # Find the position of this details section in the original body
+                details_start = body.find('Nitpick comments')
+                if details_start != -1:
+                    # Find where this section ends (next major section or end)
+                    section_markers = ['📜 Review details', '🔇 Additional comments', '</details>\n\n</details>']
+                    section_end = len(body)
+                    
+                    for marker in section_markers:
+                        marker_pos = body.find(marker, details_start)
+                        if marker_pos != -1:
+                            section_end = min(section_end, marker_pos)
+                    
+                    # Extract the raw text content
+                    raw_content = body[details_start:section_end]
+                    sections['nitpick_comments'] = {'count': count, 'content': raw_content}
         
         # Check for review details (usually at the end)
         elif 'Review details' in summary_text:
@@ -196,92 +211,52 @@ def parse_review_sections(body: str) -> Dict[str, Any]:
 
 
 def parse_file_level_comments(content: str) -> List[Dict[str, Any]]:
-    """Parse individual file-level comments from section content using HTML parsing."""
+    """Parse individual file-level comments from section content, avoiding HTML corruption."""
     comments = []
     
-    # Parse the content as HTML
-    soup = BeautifulSoup(content, 'html.parser')
+    # Use regex to find file sections instead of BeautifulSoup to avoid HTML corruption
+    # Pattern: <summary>filename (count)</summary><blockquote>content</blockquote></details>
+    file_pattern = r'<summary>([^<]+?)\s*\((\d+)\)</summary><blockquote>(.*?)</blockquote></details>'
+    file_matches = re.finditer(file_pattern, content, re.DOTALL)
     
-    # Find all nested details elements (these represent individual files)
-    file_details = soup.find_all('details')
-    
-    for details in file_details:
-        summary = details.find('summary')
-        if not summary:
-            continue
-            
-        summary_text = summary.get_text(strip=True)
+    for file_match in file_matches:
+        file_path = file_match.group(1).strip()
+        comment_count = int(file_match.group(2))
+        file_content = file_match.group(3)  # Raw blockquote content, not parsed by BeautifulSoup
         
-        # Extract file path and comment count from summary
-        # Format: "packages/web/components/settings/SettingsContainer.test.tsx (6)"
-        count_match = re.search(r'(.+?)\s*\((\d+)\)', summary_text)
-        if not count_match:
-            continue
-            
-        file_path = count_match.group(1).strip()
-        comment_count = int(count_match.group(2))
-        
-        # Get the blockquote content for this file
-        blockquote = details.find('blockquote')
-        if not blockquote:
-            continue
-            
-        # The structure is: blockquote contains text with `line-range`: **title** patterns
-        # followed by descriptions and code blocks, separated by ---
-        
-        # Get the raw HTML and decode entities, then extract text
-        # This preserves code structure better than get_text() alone
-        file_html = str(blockquote)
-        file_html = html.unescape(file_html)  # Decode HTML entities first
-        
-        # Then get clean text for pattern matching
-        blockquote_clean = BeautifulSoup(file_html, 'html.parser')
-        file_text = blockquote_clean.get_text()
-        
+        # Now parse line comments within this file content
         # Find line comment patterns: `16-24`: **Title**
-        pattern = r'`([^`]+)`:\s*\*\*(.*?)\*\*'
-        matches = list(re.finditer(pattern, file_text))
+        line_pattern = r'`([^`]+)`:\s*\*\*(.*?)\*\*\s*\n\n(.*?)(?=\n\n`[^`]+`:\s*\*\*|\n\n---|\n\n</blockquote>|$)'
+        line_matches = re.finditer(line_pattern, file_content, re.DOTALL)
         
-        for i, match in enumerate(matches):
-            line_range = match.group(1).strip() 
-            title = match.group(2).strip()
+        for line_match in line_matches:
+            line_range = line_match.group(1).strip()
+            title = line_match.group(2).strip() 
+            content_block = line_match.group(3).strip()
             
             # Check if this looks like a line reference
             if re.match(r'^[\d\-,\s]+$', line_range):
-                # Find content between this match and the next one
-                start_pos = match.end()
-                if i + 1 < len(matches):
-                    end_pos = matches[i + 1].start()
-                else:
-                    end_pos = len(file_text)
-                
-                content_section = file_text[start_pos:end_pos].strip()
-                
-                # Split description and code diff
-                description = content_section
+                # Extract description (everything before first code block)
+                description = content_block
                 code_diff = ""
                 
-                # Find where the code block starts (if any)
-                code_start = content_section.find('```')
+                code_start = content_block.find('```')
                 if code_start != -1:
-                    description = content_section[:code_start].strip()
+                    description = content_block[:code_start].strip()
                     
-                    # Extract the code block
-                    code_end = content_section.find('```', code_start + 3)
-                    if code_end != -1:
-                        # Get the code block (skip the language identifier line)
-                        code_section = content_section[code_start:code_end + 3]
-                        code_match = re.search(r'```(?:diff|typescript|javascript|python|ts|js)?\n(.*?)\n```', code_section, re.DOTALL)
-                        if code_match:
-                            code_diff = code_match.group(1).strip()
+                    # Extract code diff from raw content (no BeautifulSoup mangling)
+                    diff_match = re.search(r'```diff\n(.*?)\n```', content_block, re.DOTALL)
+                    if diff_match:
+                        code_diff = diff_match.group(1).strip()
+                        # HTML decode only entities, don't let BeautifulSoup interpret as HTML
+                        code_diff = html.unescape(code_diff)
                 
-                # Clean up description - remove "Also applies to:" lines and extra separators
+                # Clean up description
                 description_lines = []
                 for line in description.split('\n'):
                     line = line.strip()
                     if line and not line.startswith('Also applies to:') and line != '---':
                         description_lines.append(line)
-                
                 description = ' '.join(description_lines)
                 
                 comments.append({
