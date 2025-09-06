@@ -601,19 +601,49 @@ CONFIGURATION:
         inline_comments = fetch_pr_inline_comments(pr_url)
         
         coderabbit_reviews = extract_coderabbit_reviews(reviews)
+        coderabbit_inline_comments = extract_coderabbit_inline_comments(inline_comments)
         
         # Filter reviews based on options
         if not args.all_reviews and not args.since_commit:
             # Default: latest review only
             if coderabbit_reviews:
-                coderabbit_reviews = [coderabbit_reviews[-1]]  # Take the last (most recent) review
+                latest_review = coderabbit_reviews[-1]  # Take the last (most recent) review
+                coderabbit_reviews = [latest_review]
+                
+                # Also filter inline comments to only those from the latest review
+                # Use the review timestamp to filter inline comments
+                latest_review_time = latest_review.get('submittedAt', '')
+                if latest_review_time and coderabbit_inline_comments:
+                    # Filter inline comments to those from the latest review
+                    # Allow 30s before review, unlimited time after (CodeRabbit can post comments after review)
+                    from datetime import datetime, timedelta
+                    
+                    try:
+                        # Parse ISO format timestamps (GitHub API standard)
+                        review_dt = datetime.fromisoformat(latest_review_time.replace('Z', '+00:00'))
+                        before_window = timedelta(seconds=30)
+                        
+                        filtered_inline = []
+                        for comment in coderabbit_inline_comments:
+                            comment_time = comment.get('created_at', '')
+                            if comment_time:
+                                comment_dt = datetime.fromisoformat(comment_time.replace('Z', '+00:00'))
+                                # Include if: within 30s before review OR any time after review
+                                if (comment_dt >= review_dt - before_window):
+                                    filtered_inline.append(comment)
+                        
+                        original_count = len(coderabbit_inline_comments)
+                        coderabbit_inline_comments = filtered_inline
+                        if original_count != len(filtered_inline):
+                            print(f"Filtered inline comments: {original_count} → {len(filtered_inline)} (latest review only)", file=sys.stderr)
+                            
+                    except Exception as e:
+                        print(f"Warning: Could not filter inline comments by time: {e}", file=sys.stderr)
         elif args.since_commit:
             # Filter reviews submitted after the specified commit
             # This would require additional logic to compare timestamps with commit dates
             print("--since-commit option not yet implemented", file=sys.stderr)
             sys.exit(1)
-        
-        coderabbit_inline_comments = extract_coderabbit_inline_comments(inline_comments)
         
         if not coderabbit_reviews and not coderabbit_inline_comments:
             print("No CodeRabbit reviews or comments found in this PR.", file=sys.stderr)
