@@ -3,6 +3,7 @@
 ABOUTME: Extract CodeRabbit review feedback from GitHub PRs for LLM consumption
 ABOUTME: Uses gh CLI to fetch PR comments and formats them as plain text
 """
+import argparse
 import json
 import re
 import subprocess
@@ -468,26 +469,73 @@ def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: Li
 
 def main():
     """Main entry point."""
-    if len(sys.argv) != 2:
-        print("Usage: python extract-coderabbit-feedback.py <PR_URL_OR_OWNER/REPO/NUMBER>")
-        print("Examples:")
-        print("  python extract-coderabbit-feedback.py https://github.com/owner/repo/pull/123")
-        print("  python extract-coderabbit-feedback.py owner/repo/123")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Extract CodeRabbit review feedback from GitHub PRs for LLM consumption",
+        epilog="""
+Examples:
+  %(prog)s https://github.com/owner/repo/pull/123
+  %(prog)s owner/repo/123
+  %(prog)s obra/lace/278 --all-reviews
+  %(prog)s obra/lace/255 --since-commit abc123
+
+The tool extracts CodeRabbit feedback and formats it for AI coding agents.
+By default, only the latest review is processed to avoid overwhelming
+output from PRs with multiple review iterations.
+
+Output includes:
+- Refactor suggestions with specific code diffs
+- AI implementation instructions (🤖 prompts)
+- File-organized feedback sorted by priority
+- Clean format without HTML artifacts or noise
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument('pr_input', 
+                       help='GitHub PR URL or owner/repo/number format (e.g., "owner/repo/123")')
+    parser.add_argument('--all-reviews', 
+                       action='store_true',
+                       help='Extract all CodeRabbit reviews (default: latest only)')
+    parser.add_argument('--since-commit',
+                       metavar='SHA', 
+                       help='Extract reviews submitted after this commit SHA')
+    
+    args = parser.parse_args()
     
     try:
-        pr_url = parse_pr_input(sys.argv[1])
+        pr_url = parse_pr_input(args.pr_input)
         
         # Fetch both reviews and inline comments
         reviews = fetch_pr_reviews(pr_url)
         inline_comments = fetch_pr_inline_comments(pr_url)
         
         coderabbit_reviews = extract_coderabbit_reviews(reviews)
+        
+        # Filter reviews based on options
+        if not args.all_reviews and not args.since_commit:
+            # Default: latest review only
+            if coderabbit_reviews:
+                coderabbit_reviews = [coderabbit_reviews[-1]]  # Take the last (most recent) review
+        elif args.since_commit:
+            # Filter reviews submitted after the specified commit
+            # This would require additional logic to compare timestamps with commit dates
+            print("--since-commit option not yet implemented", file=sys.stderr)
+            sys.exit(1)
+        
         coderabbit_inline_comments = extract_coderabbit_inline_comments(inline_comments)
         
         if not coderabbit_reviews and not coderabbit_inline_comments:
             print("No CodeRabbit reviews or comments found in this PR.", file=sys.stderr)
             sys.exit(1)
+        
+        # Show processing info
+        if len(coderabbit_reviews) > 1:
+            print(f"Processing {len(coderabbit_reviews)} CodeRabbit reviews...", file=sys.stderr)
+        elif len(coderabbit_reviews) == 1:
+            print(f"Processing latest CodeRabbit review...", file=sys.stderr)
+            
+        if coderabbit_inline_comments:
+            print(f"Found {len(coderabbit_inline_comments)} inline comments", file=sys.stderr)
         
         formatted_output = format_for_llm(coderabbit_reviews, coderabbit_inline_comments)
         print(formatted_output)
