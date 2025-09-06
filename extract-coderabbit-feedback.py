@@ -225,8 +225,8 @@ def parse_review_sections(body: str) -> Dict[str, Any]:
                     content = str(blockquote)
                     sections['outside_diff_comments'] = {'count': count, 'content': content}
         
-        # Check for nitpick comments
-        elif 'Nitpick comments' in summary_text:
+        # Check for nitpick comments or duplicate comments  
+        elif 'Nitpick comments' in summary_text or 'Duplicate comments' in summary_text:
             count_match = re.search(r'\((\d+)\)', summary_text)
             if count_match:
                 count = int(count_match.group(1))
@@ -263,14 +263,17 @@ def parse_review_sections(body: str) -> Dict[str, Any]:
     return sections
 
 
-def parse_file_level_comments(content: str) -> List[Dict[str, Any]]:
+def parse_file_level_comments(content: str, debug: bool = False) -> List[Dict[str, Any]]:
     """Parse individual file-level comments from section content, avoiding HTML corruption."""
     comments = []
     
     # Use regex to find file sections instead of BeautifulSoup to avoid HTML corruption
     # Pattern: <summary>filename (count)</summary><blockquote>content</blockquote></details>
     file_pattern = r'<summary>([^<]+?)\s*\((\d+)\)</summary><blockquote>(.*?)</blockquote></details>'
-    file_matches = re.finditer(file_pattern, content, re.DOTALL)
+    file_matches = list(re.finditer(file_pattern, content, re.DOTALL))
+    
+    if debug:
+        print(f"DEBUG: parse_file_level_comments found {len(file_matches)} file sections", file=sys.stderr)
     
     for file_match in file_matches:
         file_path = file_match.group(1).strip()
@@ -280,7 +283,10 @@ def parse_file_level_comments(content: str) -> List[Dict[str, Any]]:
         # Now parse line comments within this file content
         # Find line comment patterns: `16-24`: **Title**
         line_pattern = r'`([^`]+)`:\s*\*\*(.*?)\*\*\s*\n\n(.*?)(?=\n\n`[^`]+`:\s*\*\*|\n\n---|\n\n</blockquote>|$)'
-        line_matches = re.finditer(line_pattern, file_content, re.DOTALL)
+        line_matches = list(re.finditer(line_pattern, file_content, re.DOTALL))
+        
+        if debug:
+            print(f"DEBUG: File {file_path} has {len(line_matches)} line comments", file=sys.stderr)
         
         for line_match in line_matches:
             line_range = line_match.group(1).strip()
@@ -326,7 +332,7 @@ def parse_file_level_comments(content: str) -> List[Dict[str, Any]]:
     return comments
 
 
-def group_comments_by_file(coderabbit_reviews: List[Dict[str, Any]], inline_comments: List[Dict[str, Any]] = None) -> Dict[str, List[Dict[str, Any]]]:
+def group_comments_by_file(coderabbit_reviews: List[Dict[str, Any]], inline_comments: List[Dict[str, Any]] = None, debug: bool = False) -> Dict[str, List[Dict[str, Any]]]:
     """Group all comments by file for better organization."""
     file_groups = {}
     
@@ -336,7 +342,7 @@ def group_comments_by_file(coderabbit_reviews: List[Dict[str, Any]], inline_comm
         
         # Add outside diff comments
         if 'outside_diff_comments' in sections:
-            outside_comments = parse_file_level_comments(sections['outside_diff_comments']['content'])
+            outside_comments = parse_file_level_comments(sections['outside_diff_comments']['content'], debug)
             for comment in outside_comments:
                 file_path = comment['file']
                 if file_path not in file_groups:
@@ -346,7 +352,7 @@ def group_comments_by_file(coderabbit_reviews: List[Dict[str, Any]], inline_comm
         
         # Add nitpick comments
         if 'nitpick_comments' in sections:
-            nitpick_comments = parse_file_level_comments(sections['nitpick_comments']['content'])
+            nitpick_comments = parse_file_level_comments(sections['nitpick_comments']['content'], debug)
             for comment in nitpick_comments:
                 file_path = comment['file']
                 if file_path not in file_groups:
@@ -415,7 +421,7 @@ def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: Li
     output.append("")
     
     # Group all comments by file
-    file_groups = group_comments_by_file(coderabbit_reviews, inline_comments)
+    file_groups = group_comments_by_file(coderabbit_reviews, inline_comments, debug)
     
     if not file_groups:
         output.append("No actionable comments found.")
