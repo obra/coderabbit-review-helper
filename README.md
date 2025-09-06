@@ -136,13 +136,41 @@ python3 extract-coderabbit-feedback.py obra/lace/255 --all-reviews
 python3 extract-coderabbit-feedback.py obra/lace/255
 ```
 
+### Custom Preambles for AI Critical Thinking
+
+Create `~/.coderabbit-extractor` with custom text to prepend to output. Perfect for encouraging AI agents to think critically rather than blindly follow suggestions:
+
+**Example: Critical Evaluation Preamble**
+```bash
+# Use the provided example
+cp example-preamble.txt ~/.coderabbit-extractor
+
+# Or create your own
+cat > ~/.coderabbit-extractor << 'EOF'
+A reviewer did some analysis of this PR. They're external, so reading the codebase cold. This is their analysis of the changes and I'd like you to evaluate the analysis and the reviewer carefully.
+
+1) should we hire this reviewer
+2) which of the issues they've flagged should be fixed?
+3) are the fixes they propose the correct ones?
+
+Anything we *should* fix, put on your todo list.
+Anything we should skip, tell me about now.
+EOF
+```
+
+This "subterfuge" approach encourages AI agents to:
+- Question the validity of suggestions
+- Evaluate reviewer competence
+- Think independently about solutions
+- Avoid blind trust in automated tools
+
 ### Integration with AI Assistants
 ```bash
-# Pipe directly to AI coding assistants
-python3 extract-coderabbit-feedback.py owner/repo/123 | claude-api "Apply these suggestions"
+# With critical evaluation preamble
+python3 extract-coderabbit-feedback.py owner/repo/123 | claude-api
 
-# Save for batch processing
-python3 extract-coderabbit-feedback.py owner/repo/123 > feedback.txt
+# Direct application (less critical thinking)
+python3 extract-coderabbit-feedback.py owner/repo/123 | claude-api "Apply these suggestions"
 ```
 
 ## Output Format

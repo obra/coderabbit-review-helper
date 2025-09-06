@@ -9,13 +9,29 @@ __author__ = "Jesse Vincent"
 __license__ = "MIT"
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from bs4 import BeautifulSoup
 import html
+
+
+def load_preamble_config() -> Optional[str]:
+    """Load custom preamble from dotfile."""
+    config_path = Path.home() / '.coderabbit-extractor'
+    
+    if config_path.exists():
+        try:
+            return config_path.read_text(encoding='utf-8').strip()
+        except Exception as e:
+            print(f"Warning: Could not read config file {config_path}: {e}", file=sys.stderr)
+            return None
+    
+    return None
 
 
 def parse_pr_input(input_str: str) -> str:
@@ -383,9 +399,17 @@ def group_comments_by_file(coderabbit_reviews: List[Dict[str, Any]], inline_comm
     return file_groups
 
 
-def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: List[Dict[str, Any]] = None, debug: bool = False) -> str:
+def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: List[Dict[str, Any]] = None, debug: bool = False, preamble: Optional[str] = None) -> str:
     """Format CodeRabbit review feedback organized by file for LLM consumption."""
     output = []
+    
+    # Add custom preamble if provided
+    if preamble:
+        output.append(preamble)
+        output.append("")
+        output.append("=" * 60)
+        output.append("")
+    
     output.append("# CodeRabbit Review Feedback")
     output.append("=" * 40)
     output.append("")
@@ -524,6 +548,10 @@ DEFAULT BEHAVIOR:
 REQUIREMENTS:
   • GitHub CLI (gh) installed and authenticated
   • Python 3.6+ with beautifulsoup4 package
+
+CONFIGURATION:
+  Create ~/.coderabbit-extractor with custom preamble text to prepend to output.
+  Useful for framing feedback (e.g., critical evaluation prompts for AI agents).
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -565,6 +593,9 @@ REQUIREMENTS:
     try:
         pr_url = parse_pr_input(args.pr_input)
         
+        # Load custom preamble from dotfile
+        preamble = load_preamble_config()
+        
         # Fetch both reviews and inline comments
         reviews = fetch_pr_reviews(pr_url)
         inline_comments = fetch_pr_inline_comments(pr_url)
@@ -597,7 +628,7 @@ REQUIREMENTS:
         if coderabbit_inline_comments:
             print(f"Found {len(coderabbit_inline_comments)} inline comments", file=sys.stderr)
         
-        formatted_output = format_for_llm(coderabbit_reviews, coderabbit_inline_comments, args.debug)
+        formatted_output = format_for_llm(coderabbit_reviews, coderabbit_inline_comments, args.debug, preamble)
         print(formatted_output)
         
     except Exception as e:
