@@ -110,6 +110,17 @@ def parse_review_type(body: str) -> str:
         return 'OTHER'
 
 
+def clean_html_artifacts(text: str) -> str:
+    """Remove HTML comments and artifacts from text."""
+    # Remove HTML comments
+    text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
+    
+    # Remove empty lines that result from comment removal
+    text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+    
+    return text.strip()
+
+
 def extract_prompt_for_ai_agents(body: str) -> List[str]:
     """Extract 'Prompt for AI Agents' sections from review body."""
     prompts = []
@@ -250,8 +261,10 @@ def parse_file_level_comments(content: str) -> List[Dict[str, Any]]:
                         code_diff = diff_match.group(1).strip()
                         # HTML decode only entities, don't let BeautifulSoup interpret as HTML
                         code_diff = html.unescape(code_diff)
+                        code_diff = clean_html_artifacts(code_diff)  # Remove any HTML comments in diffs
                 
                 # Clean up description
+                description = clean_html_artifacts(description)  # Remove HTML comments first
                 description_lines = []
                 for line in description.split('\n'):
                     line = line.strip()
@@ -384,8 +397,9 @@ def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: Li
             else:
                 main_content = body
             
-            # Clean up markdown formatting for LLM consumption
+            # Clean up markdown formatting and HTML artifacts for LLM consumption
             main_content = main_content.replace('_🛠️ Refactor suggestion_', '').strip()
+            main_content = clean_html_artifacts(main_content)  # Remove HTML comments
             main_content = re.sub(r'\n\n+', '\n\n', main_content)  # Normalize line breaks
             
             output.append("**Suggestion:**")
