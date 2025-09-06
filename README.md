@@ -33,8 +33,26 @@ python3 extract-coderabbit-feedback.py --help
 - **beautifulsoup4** package
 
 ### Install Dependencies
+
+**Option 1: Direct usage (recommended)**
 ```bash
-pip install beautifulsoup4
+# Clone and use directly
+git clone https://github.com/obra/coderabbit-review-helper.git
+cd coderabbit-review-helper
+pip install --user beautifulsoup4
+./extract-coderabbit-feedback.py owner/repo/123
+```
+
+**Option 2: pip install (when published)**
+```bash
+pip install coderabbit-review-extractor
+coderabbit-extract owner/repo/123
+```
+
+**Option 3: pipx (isolated environment)**
+```bash
+pipx install coderabbit-review-extractor
+coderabbit-extract owner/repo/123
 ```
 
 ### Setup GitHub CLI
