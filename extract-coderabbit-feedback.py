@@ -115,7 +115,13 @@ def clean_html_artifacts(text: str) -> str:
     # Remove HTML comments
     text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
     
-    # Remove empty lines that result from comment removal
+    # Remove CodeRabbit warning blocks
+    text = re.sub(r'>\s*‼️\s*\*\*IMPORTANT\*\*.*?(?=\n\n|\n$)', '', text, flags=re.DOTALL)
+    
+    # Remove other quote block artifacts  
+    text = re.sub(r'>\s*Carefully review.*?(?=\n\n|\n$)', '', text, flags=re.DOTALL)
+    
+    # Remove empty lines that result from artifact removal
     text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
     
     return text.strip()
