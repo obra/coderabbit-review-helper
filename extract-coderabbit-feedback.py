@@ -379,7 +379,7 @@ def group_comments_by_file(coderabbit_reviews: List[Dict[str, Any]], inline_comm
     return file_groups
 
 
-def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: List[Dict[str, Any]] = None) -> str:
+def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: List[Dict[str, Any]] = None, debug: bool = False) -> str:
     """Format CodeRabbit review feedback organized by file for LLM consumption."""
     output = []
     output.append("# CodeRabbit Review Feedback")
@@ -432,33 +432,44 @@ def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: Li
             output.append(f"### {i}. Lines {comment['lines']}: {title}")
             output.append("")
             
-            # Description (only if substantial)
-            if comment['description'] and len(comment['description']) > 10:
-                # Clean up redundant prefixes and formatting noise
-                desc = comment['description']
-                desc = re.sub(r'^_.*?_\s*', '', desc)  # Remove _⚠️ Potential issue_ etc
-                desc = re.sub(r'\*\*.*?\*\*\s*', '', desc, count=1)  # Remove first **title** if duplicated
-                desc = re.sub(r'Apply this diff:\s*', '', desc)
-                desc = desc.strip()
-                
-                if desc and desc != title:
-                    output.append(desc)
-                    output.append("")
+            # Show AI prompt, or fallback to description + diff
+            has_prompt = bool(comment.get('ai_prompt'))
+            has_diff = bool(comment.get('code_diff'))
             
-            # Code diff
-            if comment['code_diff']:
-                output.append("```diff")
-                output.append(comment['code_diff'])
-                output.append("```")
-                output.append("")
+            if debug:
+                output.append(f"<!-- DEBUG: has_prompt={has_prompt}, has_diff={has_diff}, source={comment.get('source')} -->")
             
-            # AI implementation prompt (reframed as suggestion, not instruction)
-            if comment.get('ai_prompt'):
+            if has_prompt:
+                if debug:
+                    output.append("<!-- DEBUG: Showing prompt only, skipping description and diff -->")
+                # AI prompt contains better explanation than description + diff
                 output.append("**Proposed prompt:**")
                 output.append("```")
                 output.append(comment['ai_prompt'])
                 output.append("```")
                 output.append("")
+            else:
+                if debug:
+                    output.append("<!-- DEBUG: No prompt, showing description and diff -->")
+                
+                # Show description only if no AI prompt available
+                if comment['description'] and len(comment['description']) > 10:
+                    desc = comment['description']
+                    desc = re.sub(r'^_.*?_\s*', '', desc)  # Remove _⚠️ Potential issue_ etc
+                    desc = re.sub(r'\*\*.*?\*\*\s*', '', desc, count=1)  # Remove first **title** if duplicated
+                    desc = re.sub(r'Apply this diff:\s*', '', desc)
+                    desc = desc.strip()
+                    
+                    if desc and desc != title:
+                        output.append(desc)
+                        output.append("")
+                
+                # Show diff only if no AI prompt available
+                if has_diff:
+                    output.append("```diff")
+                    output.append(comment['code_diff'])
+                    output.append("```")
+                    output.append("")
             
             if i < len(comments_sorted):
                 output.append("-" * 30)
@@ -521,6 +532,9 @@ REQUIREMENTS:
     parser.add_argument('--since-commit',
                        metavar='SHA', 
                        help='Extract reviews submitted after this commit SHA')
+    parser.add_argument('--debug',
+                       action='store_true',
+                       help='Show debug annotations in output to trace processing')
     
     # Custom handling for no arguments to show helpful info
     if len(sys.argv) == 1:
@@ -576,7 +590,7 @@ REQUIREMENTS:
         if coderabbit_inline_comments:
             print(f"Found {len(coderabbit_inline_comments)} inline comments", file=sys.stderr)
         
-        formatted_output = format_for_llm(coderabbit_reviews, coderabbit_inline_comments)
+        formatted_output = format_for_llm(coderabbit_reviews, coderabbit_inline_comments, args.debug)
         print(formatted_output)
         
     except Exception as e:
