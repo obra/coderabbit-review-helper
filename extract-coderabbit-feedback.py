@@ -406,11 +406,29 @@ def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: Li
         output.append(f"**{len(comments)} suggestion(s)**")
         output.append("")
         
-        # Sort comments by line number for logical order
-        comments_sorted = sorted(comments, key=lambda c: int(c['lines'].split('-')[0]) if c['lines'].replace('-', '').isdigit() else 999)
+        # Sort comments by priority: AI prompts first, then by line number
+        def get_sort_key(comment):
+            # Priority 1: Comments with AI prompts (highest priority)
+            has_ai_prompt = bool(comment.get('ai_prompt'))
+            
+            # Priority 2: Line number (for logical code flow)
+            line_num = 999
+            if comment['lines'].replace('-', '').isdigit():
+                line_num = int(comment['lines'].split('-')[0])
+                
+            # Return tuple: (ai_prompt_priority, line_number)
+            # Lower numbers = higher priority, so AI prompts get 0, others get 1
+            return (0 if has_ai_prompt else 1, line_num)
+        
+        comments_sorted = sorted(comments, key=get_sort_key)
         
         for i, comment in enumerate(comments_sorted, 1):
-            output.append(f"### {i}. Lines {comment['lines']}: {comment['title']}")
+            # Add AI prompt indicator to title for high-priority items
+            title = comment['title']
+            if comment.get('ai_prompt'):
+                title = f"🤖 {title}"
+                
+            output.append(f"### {i}. Lines {comment['lines']}: {title}")
             output.append(f"**Source:** {comment['source']}")
             if comment.get('comment_type'):
                 output.append(f"**Type:** {comment['comment_type']}")
