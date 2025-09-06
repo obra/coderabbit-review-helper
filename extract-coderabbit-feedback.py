@@ -305,145 +305,145 @@ def parse_file_level_comments(content: str) -> List[Dict[str, Any]]:
     return comments
 
 
+def group_comments_by_file(coderabbit_reviews: List[Dict[str, Any]], inline_comments: List[Dict[str, Any]] = None) -> Dict[str, List[Dict[str, Any]]]:
+    """Group all comments by file for better organization."""
+    file_groups = {}
+    
+    # Process review body comments
+    for review in coderabbit_reviews:
+        sections = parse_review_sections(review['body'])
+        
+        # Add outside diff comments
+        if 'outside_diff_comments' in sections:
+            outside_comments = parse_file_level_comments(sections['outside_diff_comments']['content'])
+            for comment in outside_comments:
+                file_path = comment['file']
+                if file_path not in file_groups:
+                    file_groups[file_path] = []
+                comment['source'] = 'outside_diff'
+                file_groups[file_path].append(comment)
+        
+        # Add nitpick comments
+        if 'nitpick_comments' in sections:
+            nitpick_comments = parse_file_level_comments(sections['nitpick_comments']['content'])
+            for comment in nitpick_comments:
+                file_path = comment['file']
+                if file_path not in file_groups:
+                    file_groups[file_path] = []
+                comment['source'] = 'nitpick'
+                file_groups[file_path].append(comment)
+    
+    # Process inline comments
+    if inline_comments:
+        for comment in inline_comments:
+            file_path = comment.get('path', 'unknown')
+            line_num = comment.get('original_line', 'unknown')
+            
+            if file_path not in file_groups:
+                file_groups[file_path] = []
+                
+            # Convert inline comment to standard format
+            body = comment.get('body', '')
+            comment_type = '🛠️ Refactor Suggestion' if '🛠️ Refactor suggestion' in body else 'Comment'
+            
+            # Extract title from body
+            title_match = re.search(r'\*\*(.*?)\*\*', body)
+            title = title_match.group(1).strip() if title_match else "Suggestion"
+            
+            # Extract description and diff
+            if '<details>' in body and 'Prompt for AI Agents' in body:
+                main_content = body.split('<details>')[0].strip()
+            else:
+                main_content = body
+                
+            main_content = main_content.replace('_🛠️ Refactor suggestion_', '').strip()
+            main_content = clean_html_artifacts(main_content)
+            
+            # Extract AI prompt
+            ai_prompt = ""
+            ai_prompt_match = re.search(r'<summary>🤖 Prompt for AI Agents</summary>\s*\n\n```\n(.*?)\n```', body, re.DOTALL)
+            if ai_prompt_match:
+                ai_prompt = ai_prompt_match.group(1).strip()
+            
+            file_groups[file_path].append({
+                'lines': str(line_num),
+                'title': title,
+                'description': main_content,
+                'code_diff': '',  # Inline comments don't have separate diffs
+                'ai_prompt': ai_prompt,
+                'source': 'inline',
+                'comment_type': comment_type
+            })
+    
+    return file_groups
+
+
 def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: List[Dict[str, Any]] = None) -> str:
-    """Format CodeRabbit review feedback as plain text for LLM consumption."""
+    """Format CodeRabbit review feedback organized by file for LLM consumption."""
     output = []
     output.append("# CodeRabbit Review Feedback")
     output.append("=" * 40)
     output.append("")
     
-    for i, review in enumerate(coderabbit_reviews, 1):
-        review_type = parse_review_type(review['body'])
-        
-        # Skip walkthrough reviews as requested
-        if review_type == 'WALKTHROUGH':
-            continue
-            
-        output.append(f"## Review {i} - {review_type}")
-        output.append("")
-        
-        body = review['body']
-        sections = parse_review_sections(body)
-        
-        # Add summary info
-        if 'actionable_count' in sections:
-            output.append(f"**Actionable comments posted: {sections['actionable_count']}**")
-            output.append("")
-        
-        # Process outside diff range comments
-        if 'outside_diff_comments' in sections:
-            outside_comments = parse_file_level_comments(sections['outside_diff_comments']['content'])
-            if outside_comments:
-                output.append("### Outside Diff Range Comments")
-                output.append("")
-                
-                for comment in outside_comments:
-                    output.append(f"**{comment['file']} (lines {comment['lines']}): {comment['title']}**")
-                    output.append("")
-                    
-                    # Clean up description (remove extra markdown formatting)
-                    desc = re.sub(r'\n+', ' ', comment['description']).strip()
-                    output.append(desc)
-                    output.append("")
-                    
-                    if comment['code_diff']:
-                        output.append("```diff")
-                        output.append(comment['code_diff'])
-                        output.append("```")
-                        output.append("")
-        
-        # Process nitpick comments  
-        if 'nitpick_comments' in sections:
-            nitpick_comments = parse_file_level_comments(sections['nitpick_comments']['content'])
-            if nitpick_comments:
-                output.append("### Nitpick Comments")
-                output.append("")
-                
-                for comment in nitpick_comments:
-                    output.append(f"**{comment['file']} (lines {comment['lines']}): {comment['title']}**")
-                    output.append("")
-                    
-                    # Clean up description
-                    desc = re.sub(r'\n+', ' ', comment['description']).strip()
-                    output.append(desc)
-                    output.append("")
-                    
-                    if comment['code_diff']:
-                        output.append("```diff")
-                        output.append(comment['code_diff'])
-                        output.append("```")
-                        output.append("")
-        
-        # Add AI prompts from review body
-        if sections.get('ai_prompts'):
-            output.append("### AI Implementation Instructions (from review body)")
-            output.append("")
-            
-            for j, prompt in enumerate(sections['ai_prompts'], 1):
-                output.append(f"**Prompt {j}:**")
-                output.append("```")
-                output.append(prompt)
-                output.append("```")
-                output.append("")
-        
-        output.append("-" * 40)
-        output.append("")
+    # Group all comments by file
+    file_groups = group_comments_by_file(coderabbit_reviews, inline_comments)
     
-    # Add inline review comments (these contain the main refactor suggestions and AI prompts)
-    if inline_comments:
-        output.append("## Inline Review Comments")
+    if not file_groups:
+        output.append("No actionable comments found.")
+        return "\n".join(output)
+    
+    # Add summary
+    total_comments = sum(len(comments) for comments in file_groups.values())
+    output.append(f"**Total files with feedback:** {len(file_groups)}")
+    output.append(f"**Total comments:** {total_comments}")
+    output.append("")
+    
+    # Process each file
+    for file_path in sorted(file_groups.keys()):
+        comments = file_groups[file_path]
+        
+        output.append(f"## {file_path}")
+        output.append(f"**{len(comments)} suggestion(s)**")
         output.append("")
         
-        for i, comment in enumerate(inline_comments, 1):
-            # Extract file and line info
-            file_path = comment.get('path', 'unknown')
-            original_line = comment.get('original_line', 'unknown')
-            
-            output.append(f"### Inline Comment {i}")
-            output.append(f"**File:** {file_path} (line {original_line})")
+        # Sort comments by line number for logical order
+        comments_sorted = sorted(comments, key=lambda c: int(c['lines'].split('-')[0]) if c['lines'].replace('-', '').isdigit() else 999)
+        
+        for i, comment in enumerate(comments_sorted, 1):
+            output.append(f"### {i}. Lines {comment['lines']}: {comment['title']}")
+            output.append(f"**Source:** {comment['source']}")
+            if comment.get('comment_type'):
+                output.append(f"**Type:** {comment['comment_type']}")
             output.append("")
             
-            # Parse the comment body
-            body = comment.get('body', '')
+            # Description
+            if comment['description']:
+                output.append("**Issue:**")
+                output.append(comment['description'])
+                output.append("")
             
-            # Extract refactor suggestion type
-            if '🛠️ Refactor suggestion' in body:
-                output.append("**Type:** 🛠️ Refactor Suggestion")
-            else:
-                output.append("**Type:** Comment")
-            output.append("")
+            # Code diff
+            if comment['code_diff']:
+                output.append("**Suggested change:**")
+                output.append("```diff")
+                output.append(comment['code_diff'])
+                output.append("```")
+                output.append("")
             
-            # Extract and format the main content (everything before AI prompt)
-            if '<details>' in body and 'Prompt for AI Agents' in body:
-                main_content = body.split('<details>')[0].strip()
-            else:
-                main_content = body
-            
-            # Clean up markdown formatting and HTML artifacts for LLM consumption
-            main_content = main_content.replace('_🛠️ Refactor suggestion_', '').strip()
-            main_content = clean_html_artifacts(main_content)  # Remove HTML comments
-            
-            # Clean up any diffs in the main content
-            main_content = re.sub(r'```diff\n(.*?)\n```', lambda m: f'```diff\n{clean_diff_artifacts(m.group(1))}\n```', main_content, flags=re.DOTALL)
-            
-            main_content = re.sub(r'\n\n+', '\n\n', main_content)  # Normalize line breaks
-            
-            output.append("**Suggestion:**")
-            output.append(main_content)
-            output.append("")
-            
-            # Extract AI prompt if present
-            ai_prompt_match = re.search(r'<summary>🤖 Prompt for AI Agents</summary>\s*\n\n```\n(.*?)\n```', body, re.DOTALL)
-            if ai_prompt_match:
-                ai_prompt = ai_prompt_match.group(1).strip()
+            # AI implementation instructions
+            if comment.get('ai_prompt'):
                 output.append("**🤖 AI Implementation Instructions:**")
                 output.append("```")
-                output.append(ai_prompt)
+                output.append(comment['ai_prompt'])
                 output.append("```")
                 output.append("")
             
-            output.append("-" * 40)
-            output.append("")
+            if i < len(comments_sorted):
+                output.append("-" * 30)
+                output.append("")
+        
+        output.append("=" * 60)
+        output.append("")
     
     return "\n".join(output)
 
