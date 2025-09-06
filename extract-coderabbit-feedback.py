@@ -470,23 +470,42 @@ def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: Li
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Extract CodeRabbit review feedback from GitHub PRs for LLM consumption",
+        description="""
+CodeRabbit Review Extractor - Convert GitHub PR reviews to LLM-friendly text
+
+This tool extracts CodeRabbit automated code review feedback from GitHub pull 
+requests and formats it as clean, organized text suitable for AI coding agents.
+
+Perfect for feeding CodeRabbit suggestions to Claude, ChatGPT, or other LLMs
+to automatically apply code improvements, refactoring suggestions, and fixes.
+        """.strip(),
         epilog="""
-Examples:
+EXAMPLES:
   %(prog)s https://github.com/owner/repo/pull/123
-  %(prog)s owner/repo/123
+  %(prog)s owner/repo/123  
   %(prog)s obra/lace/278 --all-reviews
-  %(prog)s obra/lace/255 --since-commit abc123
 
-The tool extracts CodeRabbit feedback and formats it for AI coding agents.
-By default, only the latest review is processed to avoid overwhelming
-output from PRs with multiple review iterations.
+WHAT IT EXTRACTS:
+  • Refactor suggestions with specific code diffs
+  • AI implementation instructions (🤖 prompts) with detailed steps  
+  • Nitpick comments and code quality improvements
+  • File-organized feedback sorted by priority
+  • Clean format without HTML artifacts or noise
 
-Output includes:
-- Refactor suggestions with specific code diffs
-- AI implementation instructions (🤖 prompts)
-- File-organized feedback sorted by priority
-- Clean format without HTML artifacts or noise
+HOW IT WORKS:
+  1. Uses 'gh' CLI to fetch PR reviews (works with private repos)
+  2. Extracts both main review summaries and inline code comments
+  3. Organizes feedback by file with line-number targeting
+  4. Prioritizes actionable items with AI implementation guides
+  5. Outputs clean text ready for LLM consumption
+
+DEFAULT BEHAVIOR:
+  Processes only the LATEST CodeRabbit review to avoid overwhelming output.
+  Use --all-reviews for PRs with multiple review iterations if needed.
+
+REQUIREMENTS:
+  • GitHub CLI (gh) installed and authenticated
+  • Python 3.6+ with beautifulsoup4 package
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -499,6 +518,23 @@ Output includes:
     parser.add_argument('--since-commit',
                        metavar='SHA', 
                        help='Extract reviews submitted after this commit SHA')
+    
+    # Custom handling for no arguments to show helpful info
+    if len(sys.argv) == 1:
+        print("🤖 CodeRabbit Review Extractor")
+        print("=" * 40)
+        print()
+        print("WHAT THIS DOES:")
+        print("  Converts CodeRabbit GitHub PR reviews into clean text for AI coding agents")
+        print("  (Claude, ChatGPT, etc.) to automatically apply code suggestions.")
+        print()
+        print("QUICK START:")
+        print("  python3 extract-coderabbit-feedback.py https://github.com/owner/repo/pull/123")
+        print("  python3 extract-coderabbit-feedback.py owner/repo/123")
+        print()
+        print("For full help and options, run:")
+        print("  python3 extract-coderabbit-feedback.py --help")
+        sys.exit(1)
     
     args = parser.parse_args()
     
