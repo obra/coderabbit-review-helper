@@ -10,6 +10,7 @@ import sys
 from urllib.parse import urlparse
 from typing import List, Dict, Any, Tuple
 from bs4 import BeautifulSoup
+import html
 
 
 def parse_pr_input(input_str: str) -> str:
@@ -225,63 +226,69 @@ def parse_file_level_comments(content: str) -> List[Dict[str, Any]]:
         if not blockquote:
             continue
             
-        # Get the text content and parse line comments
-        file_text = blockquote.get_text()
+        # The structure is: blockquote contains text with `line-range`: **title** patterns
+        # followed by descriptions and code blocks, separated by ---
         
-        # Find all line comment patterns: `line-range`: **Title**
-        # Split by backtick pairs to identify line references
-        line_comments = []
+        # Get the raw HTML and decode entities, then extract text
+        # This preserves code structure better than get_text() alone
+        file_html = str(blockquote)
+        file_html = html.unescape(file_html)  # Decode HTML entities first
         
-        # Look for patterns like `16-24`: **Title**
+        # Then get clean text for pattern matching
+        blockquote_clean = BeautifulSoup(file_html, 'html.parser')
+        file_text = blockquote_clean.get_text()
+        
+        # Find line comment patterns: `16-24`: **Title**
         pattern = r'`([^`]+)`:\s*\*\*(.*?)\*\*'
-        matches = re.finditer(pattern, file_text)
+        matches = list(re.finditer(pattern, file_text))
         
-        for match in matches:
-            line_range = match.group(1).strip()
+        for i, match in enumerate(matches):
+            line_range = match.group(1).strip() 
             title = match.group(2).strip()
             
             # Check if this looks like a line reference
             if re.match(r'^[\d\-,\s]+$', line_range):
-                # Find the description following this match
-                match_end = match.end()
-                
-                # Look for the next line comment or end of text
-                next_match = None
-                remaining_text = file_text[match_end:]
-                next_line_match = re.search(r'`[^`]+`:\s*\*\*', remaining_text)
-                if next_line_match:
-                    description = remaining_text[:next_line_match.start()].strip()
+                # Find content between this match and the next one
+                start_pos = match.end()
+                if i + 1 < len(matches):
+                    end_pos = matches[i + 1].start()
                 else:
-                    # Take next 500 chars or until "---" separator
-                    description = remaining_text[:500]
-                    sep_pos = description.find('---')
-                    if sep_pos > 0:
-                        description = description[:sep_pos]
+                    end_pos = len(file_text)
                 
-                description = description.strip()
+                content_section = file_text[start_pos:end_pos].strip()
                 
-                # Extract code diff from the original HTML
+                # Split description and code diff
+                description = content_section
                 code_diff = ""
-                blockquote_html = str(blockquote)
                 
-                # Look for code blocks near this comment
-                diff_patterns = [
-                    r'```diff\n(.*?)\n```',
-                    r'```typescript\n(.*?)\n```',
-                    r'```javascript\n(.*?)\n```'
-                ]
+                # Find where the code block starts (if any)
+                code_start = content_section.find('```')
+                if code_start != -1:
+                    description = content_section[:code_start].strip()
+                    
+                    # Extract the code block
+                    code_end = content_section.find('```', code_start + 3)
+                    if code_end != -1:
+                        # Get the code block (skip the language identifier line)
+                        code_section = content_section[code_start:code_end + 3]
+                        code_match = re.search(r'```(?:diff|typescript|javascript|python|ts|js)?\n(.*?)\n```', code_section, re.DOTALL)
+                        if code_match:
+                            code_diff = code_match.group(1).strip()
                 
-                for pattern in diff_patterns:
-                    diff_matches = re.findall(pattern, blockquote_html, re.DOTALL)
-                    if diff_matches:
-                        code_diff = diff_matches[0].strip()
-                        break
+                # Clean up description - remove "Also applies to:" lines and extra separators
+                description_lines = []
+                for line in description.split('\n'):
+                    line = line.strip()
+                    if line and not line.startswith('Also applies to:') and line != '---':
+                        description_lines.append(line)
+                
+                description = ' '.join(description_lines)
                 
                 comments.append({
                     'file': file_path,
                     'lines': line_range,
                     'title': title,
-                    'description': description,  # No truncation
+                    'description': description,
                     'code_diff': code_diff
                 })
     
