@@ -3,6 +3,10 @@
 ABOUTME: Extract CodeRabbit review feedback from GitHub PRs for LLM consumption
 ABOUTME: Uses gh CLI to fetch PR comments and formats them as plain text
 """
+
+__version__ = "1.0.0"
+__author__ = "Jesse Vincent"
+__license__ = "MIT"
 import argparse
 import json
 import re
@@ -535,6 +539,9 @@ REQUIREMENTS:
     parser.add_argument('--debug',
                        action='store_true',
                        help='Show debug annotations in output to trace processing')
+    parser.add_argument('--version',
+                       action='version',
+                       version=f'%(prog)s {__version__}')
     
     # Custom handling for no arguments to show helpful info
     if len(sys.argv) == 1:

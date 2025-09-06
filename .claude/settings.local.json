@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh pr view:*)",
+      "mcp__browser__browser_navigate",
+      "Read(//tmp/**)",
+      "Bash(python3:*)",
+      "Bash(pip3 install:*)",
+      "Bash(gh api:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "mcp__secret-journal__process_thoughts"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
