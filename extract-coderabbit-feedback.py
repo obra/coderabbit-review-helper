@@ -611,9 +611,23 @@ CONFIGURATION:
         
         # Filter reviews based on options
         if not args.all_reviews and not args.since_commit:
-            # Default: latest review only
+            # Default: latest review with actual content
             if coderabbit_reviews:
-                latest_review = coderabbit_reviews[-1]  # Take the last (most recent) review
+                # Find the latest review with substantial content (not just continuation)
+                latest_review = None
+                for review in reversed(coderabbit_reviews):
+                    body = review.get('body', '')
+                    # Skip continuation reviews that have minimal content
+                    if (len(body) > 100 and 
+                        'Actionable comments posted:' in body and
+                        not body.strip().startswith('**Review continued from previous batch')):
+                        latest_review = review
+                        break
+                
+                # Fallback to chronologically latest if no substantial review found
+                if not latest_review:
+                    latest_review = coderabbit_reviews[-1]
+                    
                 coderabbit_reviews = [latest_review]
                 
                 # Also filter inline comments to only those from the latest review
