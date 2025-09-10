@@ -51,6 +51,21 @@ def parse_pr_input(input_str: str) -> str:
     raise ValueError(f"Invalid PR format: {input_str}. Use 'owner/repo/number' or full URL")
 
 
+def extract_pr_info_from_url(pr_url: str) -> Tuple[str, str, int]:
+    """Extract owner, repo, and PR number from GitHub PR URL."""
+    # Parse URL like https://github.com/owner/repo/pull/123
+    if 'github.com' in pr_url:
+        parts = pr_url.replace('https://github.com/', '').split('/')
+        if len(parts) >= 4 and parts[2] == 'pull':
+            owner, repo, _, pr_number = parts[:4]
+            try:
+                return owner, repo, int(pr_number)
+            except ValueError:
+                raise ValueError(f"Invalid PR number: {pr_number}")
+    
+    raise ValueError(f"Could not parse PR URL: {pr_url}")
+
+
 def fetch_pr_reviews(pr_url: str) -> List[Dict[str, Any]]:
     """Fetch PR reviews using gh CLI."""
     try:
@@ -98,8 +113,85 @@ def fetch_pr_inline_comments(pr_url: str) -> List[Dict[str, Any]]:
     except json.JSONDecodeError as e:
         print(f"Error parsing inline comments JSON: {e}", file=sys.stderr)
         return []
+        return []
+
+
+def fetch_review_threads_graphql(owner: str, repo: str, pr_number: int) -> List[Dict[str, Any]]:
+    """Fetch review threads with resolution status using GitHub GraphQL API."""
+    query = '''
+    query($owner: String!, $repo: String!, $prNumber: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $prNumber) {
+          reviewThreads(first: 100) {
+            nodes {
+              id
+              isResolved
+              resolvedBy {
+                login
+              }
+              comments(first: 1) {
+                nodes {
+                  body
+                  author {
+                    login
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    '''
+    
+    variables = {
+        "owner": owner,
+        "repo": repo, 
+        "prNumber": pr_number
+    }
+    
+    try:
+        # Use gh api to make GraphQL request
+        import json
+        result = subprocess.run([
+            'gh', 'api', 'graphql', 
+            '-F', f'owner={owner}',
+            '-F', f'repo={repo}', 
+            '-F', f'prNumber={pr_number}',
+            '-f', f'query={query}'
+        ], capture_output=True, text=True, check=True)
+        
+        data = json.loads(result.stdout)
+        
+        # Extract review threads
+        threads = data.get('data', {}).get('repository', {}).get('pullRequest', {}).get('reviewThreads', {}).get('nodes', [])
+        
+        # Filter to only CodeRabbit threads and return as list of dicts
+        coderabbit_threads = []
+        for thread in threads:
+            if thread and thread.get('comments', {}).get('nodes', []):
+                comment = thread['comments']['nodes'][0]
+                author_login = comment.get('author', {}).get('login', '')
+                # Check for both coderabbitai and coderabbitai[bot] formats
+                if author_login in ['coderabbitai', 'coderabbitai[bot]']:
+                    coderabbit_threads.append({
+                        'id': thread['id'],
+                        'isResolved': thread.get('isResolved', False),
+                        'resolvedBy': thread.get('resolvedBy', {}).get('login') if thread.get('resolvedBy') else None,
+                        'body': comment.get('body', ''),
+                        'author': author_login
+                    })
+        
+        return coderabbit_threads
+        
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Could not fetch review threads via GraphQL: {e.stderr}", file=sys.stderr)
+        return []
+    except json.JSONDecodeError as e:
+        print(f"Warning: Could not parse GraphQL response: {e}", file=sys.stderr)
+        return []
     except Exception as e:
-        print(f"Error processing PR URL for inline comments: {e}", file=sys.stderr)
+        print(f"Warning: Error processing GraphQL data: {e}", file=sys.stderr)
         return []
 
 
@@ -109,6 +201,65 @@ def extract_coderabbit_reviews(reviews: List[Dict[str, Any]]) -> List[Dict[str, 
         review for review in reviews
         if review.get('author', {}).get('login') == 'coderabbitai'
     ]
+
+
+def filter_resolved_comments(comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filter out comments that have been marked as resolved."""
+    return [
+        comment for comment in comments
+        if not is_comment_resolved(comment.get('body', ''))
+    ]
+
+
+def filter_resolved_threads(threads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filter out review threads that have been marked as resolved via GitHub's native resolution."""
+    return [
+        thread for thread in threads
+        if not thread.get('isResolved', False)
+    ]
+
+
+def filter_resolved_review_content(review_body: str) -> str:
+    """Filter out resolved suggestions from review body content."""
+    # Look for resolved comment patterns and remove them
+    # This handles CodeRabbit's text-based resolution markers
+    
+    # Pattern to match resolved comments within the review body
+    # Look for sections that contain resolution markers
+    resolved_patterns = [
+        # Match individual comment sections that are resolved
+        r'<details>.*?✅\s*(?:Addressed|Resolved|Fixed|Completed).*?</details>',
+        # Match line-specific resolved comments
+        r'`[^`]+`:\s*\*\*[^*]+\*\*.*?✅\s*(?:Addressed|Resolved|Fixed|Completed).*?(?=<details>|$)',
+    ]
+    
+    filtered_body = review_body
+    for pattern in resolved_patterns:
+        filtered_body = re.sub(pattern, '', filtered_body, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Also remove any standalone resolution lines
+    filtered_body = re.sub(r'^.*✅\s*(?:Addressed|Resolved|Fixed|Completed).*$(\n)?', '', filtered_body, flags=re.MULTILINE | re.IGNORECASE)
+    
+    return filtered_body.strip()
+
+
+def is_comment_resolved(comment_body: str) -> bool:
+    """Check if a comment has been marked as resolved/addressed."""
+    # Look for resolution indicators in the comment body
+    resolution_patterns = [
+        r'✅\s*Addressed\s+in\s+commit[s]?\s+[a-f0-9]+(?:\s+to\s+[a-f0-9]+)?',
+        r'✅\s*Resolved\s+in\s+commit[s]?\s+[a-f0-9]+(?:\s+to\s+[a-f0-9]+)?',
+        r'✅\s*Fixed\s+in\s+commit[s]?\s+[a-f0-9]+(?:\s+to\s+[a-f0-9]+)?',
+        r'✅\s*Completed\s+in\s+commit[s]?\s+[a-f0-9]+(?:\s+to\s+[a-f0-9]+)?',
+        r'\[x\]',  # Checkbox checked
+        r'\[X\]',  # Checkbox checked
+    ]
+    
+    for pattern in resolution_patterns:
+        if re.search(pattern, comment_body, re.IGNORECASE):
+            return True
+    
+    return False
 
 
 def extract_coderabbit_inline_comments(comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -332,13 +483,22 @@ def parse_file_level_comments(content: str, debug: bool = False) -> List[Dict[st
     return comments
 
 
-def group_comments_by_file(coderabbit_reviews: List[Dict[str, Any]], inline_comments: List[Dict[str, Any]] = None, debug: bool = False) -> Dict[str, List[Dict[str, Any]]]:
+def group_comments_by_file(coderabbit_reviews: List[Dict[str, Any]], inline_comments: List[Dict[str, Any]] = None, debug: bool = False, include_resolved: bool = True) -> Dict[str, List[Dict[str, Any]]]:
     """Group all comments by file for better organization."""
     file_groups = {}
     
     # Process review body comments
     for review in coderabbit_reviews:
-        sections = parse_review_sections(review['body'])
+        review_body = review['body']
+        
+        # Filter out resolved content from review body if requested
+        if not include_resolved:
+            original_body = review_body
+            review_body = filter_resolved_review_content(review_body)
+            if debug and len(original_body) != len(review_body):
+                print(f"DEBUG: Filtered resolved content from review body (length: {len(original_body)} -> {len(review_body)})", file=sys.stderr)
+        
+        sections = parse_review_sections(review_body)
         
         # Add outside diff comments
         if 'outside_diff_comments' in sections:
@@ -405,7 +565,7 @@ def group_comments_by_file(coderabbit_reviews: List[Dict[str, Any]], inline_comm
     return file_groups
 
 
-def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: List[Dict[str, Any]] = None, debug: bool = False, preamble: Optional[str] = None) -> str:
+def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: List[Dict[str, Any]] = None, debug: bool = False, preamble: Optional[str] = None, include_resolved: bool = True) -> str:
     """Format CodeRabbit review feedback organized by file for LLM consumption."""
     output = []
     
@@ -421,7 +581,7 @@ def format_for_llm(coderabbit_reviews: List[Dict[str, Any]], inline_comments: Li
     output.append("")
     
     # Group all comments by file
-    file_groups = group_comments_by_file(coderabbit_reviews, inline_comments, debug)
+    file_groups = group_comments_by_file(coderabbit_reviews, inline_comments, debug, include_resolved)
     
     if not file_groups:
         output.append("No actionable comments found.")
@@ -564,6 +724,9 @@ CONFIGURATION:
     
     parser.add_argument('pr_input', 
                        help='GitHub PR URL or owner/repo/number format (e.g., "owner/repo/123")')
+    parser.add_argument('--include-resolved', 
+                       action='store_true',
+                       help='Include review suggestions that have been marked as resolved (default: filter them out)')
     parser.add_argument('--all-reviews', 
                        action='store_true',
                        help='Extract all CodeRabbit reviews (default: latest only)')
@@ -606,8 +769,53 @@ CONFIGURATION:
         reviews = fetch_pr_reviews(pr_url)
         inline_comments = fetch_pr_inline_comments(pr_url)
         
+        # Extract PR info for GraphQL query
+        try:
+            owner, repo, pr_number = extract_pr_info_from_url(pr_url)
+            
+            # Fetch review threads with resolution status via GraphQL
+            review_threads = fetch_review_threads_graphql(owner, repo, pr_number)
+            
+            if review_threads and not args.include_resolved:
+                # Filter out resolved threads (GitHub native conversation resolution)
+                original_thread_count = len(review_threads)
+                review_threads = filter_resolved_threads(review_threads)
+                filtered_thread_count = original_thread_count - len(review_threads)
+                if filtered_thread_count > 0:
+                    print(f"Filtered resolved review threads: {filtered_thread_count} resolved threads hidden", file=sys.stderr)
+            elif review_threads:
+                print(f"Found {len(review_threads)} review threads (including resolved)", file=sys.stderr)
+                
+        except Exception as e:
+            print(f"Warning: Could not fetch review thread resolution data: {e}", file=sys.stderr)
+            review_threads = []
+        
         coderabbit_reviews = extract_coderabbit_reviews(reviews)
         coderabbit_inline_comments = extract_coderabbit_inline_comments(inline_comments)
+        
+        # Convert review threads to inline comment format and merge
+        if review_threads:
+            for thread in review_threads:
+                # Convert thread to inline comment format
+                inline_comment = {
+                    'id': thread['id'],
+                    'body': thread['body'],
+                    'user': {'login': 'coderabbitai[bot]'},
+                    'created_at': '',  # GraphQL doesn't provide timestamp in this query
+                    'path': 'unknown',  # GraphQL doesn't provide file path in this query
+                    'original_line': 0,  # GraphQL doesn't provide line number in this query
+                    'html_url': f"https://github.com/{owner}/{repo}/pull/{pr_number}#discussion-{thread['id']}"
+                }
+                coderabbit_inline_comments.append(inline_comment)
+        
+        # Filter out resolved comments if not including them
+        if not args.include_resolved:
+            original_count = len(coderabbit_inline_comments)
+            coderabbit_inline_comments = filter_resolved_comments(coderabbit_inline_comments)
+            filtered_count = original_count - len(coderabbit_inline_comments)
+            if filtered_count > 0:
+                print(f"Filtered resolved comments: {filtered_count} resolved comments hidden", file=sys.stderr)
+        # Note: Review-level filtering is handled in group_comments_by_file()
         
         # Filter reviews based on options
         if not args.all_reviews and not args.since_commit:
@@ -678,7 +886,7 @@ CONFIGURATION:
         if coderabbit_inline_comments:
             print(f"Found {len(coderabbit_inline_comments)} inline comments", file=sys.stderr)
         
-        formatted_output = format_for_llm(coderabbit_reviews, coderabbit_inline_comments, args.debug, preamble)
+        formatted_output = format_for_llm(coderabbit_reviews, coderabbit_inline_comments, args.debug, preamble, args.include_resolved)
         print(formatted_output)
         
     except Exception as e:
