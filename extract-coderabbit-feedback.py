@@ -85,6 +85,32 @@ def fetch_pr_reviews(pr_url: str) -> List[Dict[str, Any]]:
         sys.exit(1)
 
 
+def fetch_latest_commit_time(pr_url: str) -> Optional[str]:
+    """Fetch the timestamp of the most recent commit in the PR."""
+    try:
+        # Extract owner/repo/number from URL
+        owner, repo, pr_number = extract_pr_info_from_url(pr_url)
+        
+        # Get commits from the PR
+        result = subprocess.run(
+            ['gh', 'api', f'repos/{owner}/{repo}/pulls/{pr_number}/commits'],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        commits = json.loads(result.stdout)
+        
+        if commits:
+            # Get the most recent commit (last in the list)
+            latest_commit = commits[-1]
+            return latest_commit['commit']['committer']['date']
+        
+        return None
+    except Exception as e:
+        print(f"Warning: Could not fetch latest commit time: {e}", file=sys.stderr)
+        return None
+
+
 def fetch_pr_inline_comments(pr_url: str) -> List[Dict[str, Any]]:
     """Fetch PR inline review comments using GitHub API via gh CLI."""
     try:
@@ -132,6 +158,7 @@ def fetch_review_threads_graphql(owner: str, repo: str, pr_number: int) -> List[
               comments(first: 1) {
                 nodes {
                   body
+                  createdAt
                   author {
                     login
                   }
@@ -179,6 +206,7 @@ def fetch_review_threads_graphql(owner: str, repo: str, pr_number: int) -> List[
                         'isResolved': thread.get('isResolved', False),
                         'resolvedBy': thread.get('resolvedBy', {}).get('login') if thread.get('resolvedBy') else None,
                         'body': comment.get('body', ''),
+                        'createdAt': comment.get('createdAt', ''),
                         'author': author_login
                     })
         
@@ -801,7 +829,7 @@ CONFIGURATION:
                     'id': thread['id'],
                     'body': thread['body'],
                     'user': {'login': 'coderabbitai[bot]'},
-                    'created_at': '',  # GraphQL doesn't provide timestamp in this query
+                    'created_at': thread.get('createdAt', ''),  # Now includes timestamp from GraphQL
                     'path': 'unknown',  # GraphQL doesn't provide file path in this query
                     'original_line': 0,  # GraphQL doesn't provide line number in this query
                     'html_url': f"https://github.com/{owner}/{repo}/pull/{pr_number}#discussion-{thread['id']}"
@@ -838,35 +866,31 @@ CONFIGURATION:
                     
                 coderabbit_reviews = [latest_review]
                 
-                # Also filter inline comments to only those from the latest review
-                # Use the review timestamp to filter inline comments
-                latest_review_time = latest_review.get('submittedAt', '')
-                if latest_review_time and coderabbit_inline_comments:
-                    # Filter inline comments to those from the latest review
-                    # Allow 30s before review, unlimited time after (CodeRabbit can post comments after review)
+                # Filter inline comments to only those posted after the most recent commit
+                latest_commit_time = fetch_latest_commit_time(pr_url)
+                if latest_commit_time and coderabbit_inline_comments:
                     from datetime import datetime, timedelta
                     
                     try:
                         # Parse ISO format timestamps (GitHub API standard)
-                        review_dt = datetime.fromisoformat(latest_review_time.replace('Z', '+00:00'))
-                        before_window = timedelta(seconds=30)
+                        commit_dt = datetime.fromisoformat(latest_commit_time.replace('Z', '+00:00'))
                         
                         filtered_inline = []
                         for comment in coderabbit_inline_comments:
                             comment_time = comment.get('created_at', '')
                             if comment_time:
                                 comment_dt = datetime.fromisoformat(comment_time.replace('Z', '+00:00'))
-                                # Include if: within 30s before review OR any time after review
-                                if (comment_dt >= review_dt - before_window):
+                                # Include comments posted after the latest commit
+                                if comment_dt > commit_dt:
                                     filtered_inline.append(comment)
                         
                         original_count = len(coderabbit_inline_comments)
                         coderabbit_inline_comments = filtered_inline
                         if original_count != len(filtered_inline):
-                            print(f"Filtered inline comments: {original_count} → {len(filtered_inline)} (latest review only)", file=sys.stderr)
+                            print(f"Filtered inline comments: {original_count} → {len(filtered_inline)} (after latest commit)", file=sys.stderr)
                             
                     except Exception as e:
-                        print(f"Warning: Could not filter inline comments by time: {e}", file=sys.stderr)
+                        print(f"Warning: Could not filter inline comments by commit time: {e}", file=sys.stderr)
         elif args.since_commit:
             # Filter reviews submitted after the specified commit
             # This would require additional logic to compare timestamps with commit dates
